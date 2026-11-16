@@ -4,5 +4,5 @@ COPY --chown=node:node . .
 USER node
 RUN npm ci --offline --ignore-scripts --no-audit --no-fund && npm run build
 ENV HOST=0.0.0.0 DATA_DIR=/tmp/intake-data
-EXPOSE 4310
+EXPOSE 4310 4312/udp
 CMD ["npm", "start"]

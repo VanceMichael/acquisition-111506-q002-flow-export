@@ -8,6 +8,7 @@ export const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 export async function openStore(directory) {
   await mkdir(join(directory, 'blobs'), { recursive: true });
   const journal = join(directory, 'receipts.jsonl');
+  const netflowJournal = join(directory, 'netflow.jsonl');
   let receipts;
   try {
     receipts = (await readFile(journal, 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line));
@@ -21,6 +22,16 @@ export async function openStore(directory) {
     pending = next.catch(() => {});
     return next;
   };
+  // 内容寻址的原始字节：人工依据与自动采集数据报共用同一 blob 目录。
+  async function saveBlob(bytes) {
+    const sha256 = digest(bytes);
+    try {
+      await writeFile(join(directory, 'blobs', sha256), bytes, { flag: 'wx' });
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+    return sha256;
+  }
   return {
     list() {
       const latest = new Map();
@@ -33,6 +44,18 @@ export async function openStore(directory) {
     async evidence(sha) {
       if (!/^[a-f0-9]{64}$/.test(sha)) throw Object.assign(new Error('依据标识无效'), { status: 400 });
       return readFile(join(directory, 'blobs', sha));
+    },
+    saveBlob,
+    async readNetflow() {
+      try {
+        return (await readFile(netflowJournal, 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line));
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        return [];
+      }
+    },
+    appendNetflow(event) {
+      return serialize(() => appendFile(netflowJournal, JSON.stringify(event) + '\n'));
     },
     accept(key, record, evidence) {
       return serialize(async () => {
@@ -55,13 +78,7 @@ export async function openStore(directory) {
         const identity = digest(JSON.stringify({ key, record, refs }));
         const existing = receipts.find(receipt => receipt.identity === identity);
         if (existing) return { ...structuredClone(existing), duplicate: true };
-        for (const item of prepared) {
-          try {
-            await writeFile(join(directory, 'blobs', item.ref.sha256), item.bytes, { flag: 'wx' });
-          } catch (error) {
-            if (error.code !== 'EEXIST') throw error;
-          }
-        }
+        for (const item of prepared) await saveBlob(item.bytes);
         const receipt = { sequence: receipts.length + 1, identity, key, record: structuredClone(record), evidence: refs, receivedAt: new Date().toISOString() };
         await appendFile(journal, JSON.stringify(receipt) + '\n');
         receipts.push(receipt);
